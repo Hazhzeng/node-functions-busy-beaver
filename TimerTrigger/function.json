@@ -8,5 +8,5 @@
     }
   ],
   "scriptFile": "../dist/TimerTrigger/index.js",
-  "disabled": true
+  "disabled": false
 }
