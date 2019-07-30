@@ -2,21 +2,23 @@ param(
     [Parameter(Mandatory=$true)][string]$ResourceGroupName,
     [Parameter(Mandatory=$true)][string]$StorageName,
     [Parameter(Mandatory=$true)][string]$FunctionPrefix,
-    [string]$Command = "create"
+    [ValidateSet('create', 'delete', 'deploy', 'starttest', "stoptest")][string]$Command = "create"
 )
 
-$PERIODS = 5
-$PROCESS_TIMES = 1
-$TYPES = "http", "queue", "blob"
+$PERIODS = @(5, 30, 60, 90, 120) # Unit: second
+$PROCESS_TIMES = @(3, 60) # Unit: second
+$TYPES = "http" #, "queue", "blob"
 $DEPLOYMENT_PATH = "$PSScriptRoot\deployment"
 $PROJECT_ROOT = "$PSScriptRoot\.."
+$LOG_PATH = "$ENV:HOME\Desktop"
+
 
 function create([string]$resourceGroupName, [string]$storageName, [string]$functionPrefix) {
     ForEach ($period in $PERIODS) {
         ForEach ($process_time in $PROCESS_TIMES) {
             ForEach($type in $TYPES) {
                 $function_name = "$functionPrefix-$type-$period-$process_time"
-                Start-Process -FilePath "az" -NoNewWindow -ArgumentList functionapp,create,"-n","$function_name","-s","$storageName","-g","$resourceGroupName","-c",westus,"--os-type",Linux,"--runtime",node,"--disable-app-insights"
+                Start-Process -FilePath "az" -NoNewWindow -ArgumentList functionapp,create,"-n","$function_name","-s","$storageName","-g","$resourceGroupName","-c",eastasia,"--os-type",Linux,"--runtime",node,"--disable-app-insights"
             }
         }
     }
@@ -78,6 +80,41 @@ function deploy([string]$type, [int]$period, [int]$process_time) {
     Start-Process -NoNewWindow -WorkingDirectory "$DEPLOYMENT_PATH" -FilePath "func" -ArgumentList "azure","functionapp","publish","$functionName" -Wait
 }
 
+function testHttpTrigger([string]$function_name, [int]$period, [int]$process_time) {
+    Start-Job -ScriptBlock {
+        param ([string]$function_name, [int]$period, [int]$process_time, [string]$log_path)
+         = "$env:HOME\Desktop"
+        while ($true) {
+            Start-Sleep -Seconds $period
+            $timestamp = (Get-Date)
+            $result = $null
+            try {
+                $url = "https://$function_name.azurewebsites.net/api/HttpTrigger?busySeconds=$process_time"
+                "$timestamp Requesting $url" | Out-File -FilePath "$log_path" -Force -Append -Encoding "string"
+                $result = Invoke-WebRequest -Method Get -Uri $url
+                "$timestamp Result $result" | Out-File -FilePath "$log_path" -Force -Append -Encoding "string"
+            } catch {
+                $message = $_.Exception.Message
+                "$timestamp Error $message" | Out-File -FilePath "$log_path" -Force -Append -Encoding "string"
+            }
+        }
+    } -Name "$function_name-test" -ArgumentList $function_name,$period,$process_time,"$LOG_PATH\$function_name.log"
+}
+
+function testTrigger([string]$type, [int]$period, [int]$process_time) {
+    $lowercasedType = $type.ToLower()
+    $function_name = "$FunctionPrefix-$lowercasedType-$period-$process_time"
+    if ($type.ToLower() -eq "http") {
+        testHttpTrigger $function_name $period $process_time
+    }
+}
+
+function stopTest([string]$type, [int]$period, [int]$process_time) {
+    $lowercasedType = $type.ToLower()
+    $function_name = "$FunctionPrefix-$lowercasedType-$period-$process_time"
+    Stop-Job -Id (Get-Job -Name "$function_name-test").Id
+}
+
 if ($Command.ToLower() -eq "create") {
     create $ResourceGroupName $StorageName $FunctionPrefix
     Write-Host -ForegroundColor Yellow "Creating function app asynchronously. Check your portal constantly."
@@ -95,5 +132,22 @@ if ($Command.ToLower() -eq "create") {
         }
     }
     post_deploy
-    Write-Host -ForegroundColor Yellow "Deploying to function app... Check your portal constantly."
+    Write-Host -ForegroundColor Yellow "Deployed to function app... Check your portal."
+} elseif ($Command.ToLower() -eq "starttest") {
+    ForEach ($period in $PERIODS) {
+        ForEach ($process_time in $PROCESS_TIMES) {
+            ForEach($type in $TYPES) {
+                testTrigger $type $period $process_time
+            }
+        }
+    }
+    Write-Host -ForegroundColor Yellow "Check your log in $LOG_PATH"
+} elseif ($Command.ToLower() -eq "stoptest") {
+    ForEach ($period in $PERIODS) {
+        ForEach ($process_time in $PROCESS_TIMES) {
+            ForEach($type in $TYPES) {
+                stopTest $type $period $process_time
+            }
+        }
+    }
 }
