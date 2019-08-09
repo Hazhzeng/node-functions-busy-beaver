@@ -4,7 +4,7 @@
       "name": "myQueueItem",
       "type": "queueTrigger",
       "direction": "in",
-      "queueName": "js-queue-items",
+      "queueName": "js-queue-items"
     }
   ],
   "scriptFile": "../dist/QueueTrigger/index.js",
